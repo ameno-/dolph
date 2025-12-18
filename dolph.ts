@@ -74,10 +74,11 @@ function startSpinner(label: string): SpinnerHandle {
   const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let i = 0;
 
-  // One line spinner; we keep it simple and avoid external deps.
+  // One line spinner; keep it dependency-free.
+  // We clear the line before each frame so it doesn't overwrite other output.
   const timer = setInterval(() => {
     const frame = frames[i++ % frames.length];
-    process.stdout.write(`\r${frame} ${label}`);
+    process.stdout.write(`\r\x1b[2K${frame} ${label}`);
   }, 80);
 
   return {
@@ -92,12 +93,19 @@ class TerminalReporter {
   private toolStartTimes = new Map<string, number>();
   private spinner: SpinnerHandle | null = null;
   private maxPayloadChars: number;
+  private spinnerEnabled = true;
 
   constructor(opts?: { maxPayloadChars?: number }) {
     this.maxPayloadChars = opts?.maxPayloadChars ?? 2000;
   }
 
+  setSpinnerEnabled(enabled: boolean): void {
+    this.spinnerEnabled = enabled;
+    if (!enabled) this.stopSpinner();
+  }
+
   startThinking(label = "Dolph is thinking..."): void {
+    if (!this.spinnerEnabled) return;
     this.stopSpinner();
     this.spinner = startSpinner(label);
   }
@@ -900,16 +908,69 @@ ENVIRONMENT:
 
         try {
           const agent = createAgent({ reporter, verbose: !!values.verbose });
-          const runResult = await run(agent, input, { maxTurns: getConfig().maxTurns });
 
+          // Use streaming in interactive mode so users see output immediately.
+          const stream: any = await run(agent, input, {
+            maxTurns: getConfig().maxTurns,
+            stream: true,
+          } as any);
+
+          // While streaming text deltas, stop the spinner so it doesn't overwrite output.
+          reporter.setSpinnerEnabled(false);
           reporter.stopSpinner();
 
-          // Print assistant output
-          console.log(runResult.finalOutput);
+          let sawAnyText = false;
+
+          for await (const event of stream) {
+            // Depending on SDK/provider, text deltas can come through either directly
+            // or nested under raw model stream events.
+            if (event?.type === "output_text_delta" && typeof event.delta === "string") {
+              sawAnyText = true;
+              process.stdout.write(event.delta);
+              continue;
+            }
+
+            if (
+              event?.type === "raw_model_stream_event" &&
+              event?.data?.type === "output_text_delta" &&
+              typeof event.data.delta === "string"
+            ) {
+              sawAnyText = true;
+              process.stdout.write(event.data.delta);
+              continue;
+            }
+
+            // Optional debugging of non-text events
+            if (values.verbose && event?.type && event.type !== "run_item_stream_event") {
+              // keep it minimal to avoid flooding
+              // console.log("[event]", event.type);
+            }
+          }
+
+          // Ensure we end on a newline (in case the model didn't).
+          if (sawAnyText) process.stdout.write("\n");
+
+          // Wait for completion and read final usage.
+          await stream.completed;
+
+          // If we didn't see any streaming text, fall back to finalOutput.
+          if (!sawAnyText) {
+            const finalOutput =
+              stream?.result?.finalOutput ??
+              stream?.result?.output_text ??
+              stream?.result?.outputText;
+
+            if (typeof finalOutput === "string" && finalOutput.trim().length > 0) {
+              console.log(finalOutput);
+            }
+          }
+
+          // Re-enable spinner for the next turn.
+          reporter.setSpinnerEnabled(true);
 
           // Verbose diagnostics
           if (values.verbose) {
-            const usage = (runResult as any).usage;
+            const usage = stream?.result?.usage;
             if (usage?.totalTokens !== undefined) {
               console.log(`\n📊 tokens: ${usage.totalTokens}`);
             }
