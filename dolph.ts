@@ -2,19 +2,19 @@
 /**
  * MySQL Agent - Single-File Implementation
  *
- * A MySQL database agent using OpenAI Agents SDK and Bun.js native SQL driver.
+ * A MySQL database agent using OpenAI Agents SDK and Bun.js.
  *
  * CLI Usage:
- *   bun mysql-agent.ts --task test-connection
- *   bun mysql-agent.ts --task list-tables
- *   bun mysql-agent.ts --task list-tables --include-counts
- *   bun mysql-agent.ts --task get-schema --table users
- *   bun mysql-agent.ts --task query --sql "SELECT * FROM users LIMIT 10"
- *   bun mysql-agent.ts --chat "What tables are in this database?"
- *   bun mysql-agent.ts --interactive
+ *   bun dolph.ts --task test-connection
+ *   bun dolph.ts --task list-tables
+ *   bun dolph.ts --task list-tables --include-counts
+ *   bun dolph.ts --task get-schema --table users
+ *   bun dolph.ts --task query --sql "SELECT * FROM users LIMIT 10"
+ *   bun dolph.ts --chat "What tables are in this database?"
+ *   bun dolph.ts --interactive
  *
  * Server Usage:
- *   import { executeMySQLTask, runMySQLAgent, MySQLAgentTasks } from "./mysql-agent.ts";
+ *   import { executeMySQLTask, runMySQLAgent, MySQLAgentTasks } from "./dolph.ts";
  *
  *   // Task-based execution
  *   const tables = await executeMySQLTask({ task: MySQLAgentTasks.LIST_TABLES });
@@ -42,6 +42,114 @@ import mysql from "mysql2/promise";
 import { parseArgs } from "util";
 
 type MySQLConnection = mysql.Connection;
+
+// ============================================================================
+// CLI REPORTING (interactive UX)
+// ============================================================================
+
+type SpinnerHandle = { stop: () => void };
+
+function truncateMiddle(str: string, max: number): string {
+  if (str.length <= max) return str;
+  const head = Math.max(0, Math.floor(max * 0.7));
+  const tail = Math.max(0, max - head - 12);
+  return `${str.slice(0, head)}\n... (truncated) ...\n${str.slice(str.length - tail)}`;
+}
+
+function safeStringify(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function startSpinner(label: string): SpinnerHandle {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+
+  // One line spinner; we keep it simple and avoid external deps.
+  const timer = setInterval(() => {
+    const frame = frames[i++ % frames.length];
+    process.stdout.write(`\r${frame} ${label}`);
+  }, 80);
+
+  return {
+    stop: () => {
+      clearInterval(timer);
+      process.stdout.write("\r\x1b[2K"); // clear line
+    },
+  };
+}
+
+class TerminalReporter {
+  private toolStartTimes = new Map<string, number>();
+  private spinner: SpinnerHandle | null = null;
+  private maxPayloadChars: number;
+
+  constructor(opts?: { maxPayloadChars?: number }) {
+    this.maxPayloadChars = opts?.maxPayloadChars ?? 2000;
+  }
+
+  startThinking(label = "Dolph is thinking..."): void {
+    this.stopSpinner();
+    this.spinner = startSpinner(label);
+  }
+
+  stopSpinner(): void {
+    if (this.spinner) {
+      this.spinner.stop();
+      this.spinner = null;
+    }
+  }
+
+  private toolKey(toolCall: any): string {
+    return String(toolCall?.id ?? toolCall?.call_id ?? toolCall?.name ?? toolCall?.toolName ?? Math.random());
+  }
+
+  onToolStart(toolCall: any, opts: { verbose: boolean }): void {
+    const name = toolCall?.name ?? toolCall?.toolName ?? "(unknown_tool)";
+    const key = this.toolKey(toolCall);
+
+    this.stopSpinner();
+    this.toolStartTimes.set(key, performance.now());
+
+    process.stdout.write(`\n→ tool: ${name}\n`);
+
+    if (opts.verbose) {
+      const args = toolCall?.arguments ?? toolCall?.args;
+      if (args !== undefined) {
+        const argsStr = truncateMiddle(safeStringify(args), this.maxPayloadChars);
+        process.stdout.write(`${argsStr}\n`);
+      }
+    }
+
+    this.startThinking("Dolph is working...");
+  }
+
+  onToolEnd(toolCall: any, result: any, opts: { verbose: boolean }): void {
+    const name = toolCall?.name ?? toolCall?.toolName ?? "(unknown_tool)";
+    const key = this.toolKey(toolCall);
+    const start = this.toolStartTimes.get(key);
+    const duration = start ? performance.now() - start : undefined;
+
+    this.stopSpinner();
+    process.stdout.write(`✓ tool: ${name}${duration ? ` (${formatMs(duration)})` : ""}\n`);
+
+    if (opts.verbose && result !== undefined) {
+      const resStr = truncateMiddle(safeStringify(result), this.maxPayloadChars);
+      process.stdout.write(`${resStr}\n`);
+    }
+
+    this.startThinking("Dolph is thinking...");
+  }
+}
 
 // ============================================================================
 // TYPES
@@ -501,13 +609,23 @@ const runQueryTool = tool({
 // AGENT DEFINITION
 // ============================================================================
 
-function createAgent(): Agent {
+type CreateAgentOptions = {
+  reporter?: TerminalReporter;
+  verbose?: boolean;
+  maxPayloadChars?: number;
+};
+
+function createAgent(options?: CreateAgentOptions): Agent {
   const config = getConfig();
+  const reporter = options?.reporter;
+  const verbose = options?.verbose ?? false;
 
   return new Agent({
-    name: "MySQL Assistant",
+    name: "Dolph",
     model: config.model,
-    instructions: `You are a MySQL database assistant. Help users explore and query databases safely.
+    instructions: `You are Dolph 🐬 — a friendly, safety-first MySQL database assistant.
+
+You help users explore and query databases safely.
 
 ## Tools Available
 - test_connection: Verify database connectivity
@@ -535,7 +653,22 @@ function createAgent(): Agent {
       getAllSchemasTool,
       runQueryTool,
     ],
-  });
+
+    // Hooks are optional; we use them to add CLI progress output in interactive mode.
+    // Typed as `any` to avoid coupling to SDK internal types.
+    ...(reporter
+      ? {
+          hooks: {
+            beforeToolCall: async ({ toolCall }: any) => {
+              reporter.onToolStart(toolCall, { verbose });
+            },
+            afterToolCall: async ({ toolCall, result }: any) => {
+              reporter.onToolEnd(toolCall, result, { verbose });
+            },
+          },
+        }
+      : {}),
+  } as any);
 }
 
 // ============================================================================
@@ -580,6 +713,7 @@ export async function executeMySQLTask<T = unknown>(
         break;
 
       case MySQLAgentTasks.CHAT:
+        // In server mode we run quietly (no reporter).
         const agent = createAgent();
         const result = await run(agent, taskInput.params.message, {
           maxTurns: getConfig().maxTurns,
@@ -648,6 +782,7 @@ async function runCLI(): Promise<void> {
       sql: { type: "string", short: "s" },
       chat: { type: "string", short: "c" },
       interactive: { type: "boolean", short: "i" },
+      verbose: { type: "boolean", short: "v" },
       "include-counts": { type: "boolean" },
       "allow-write": { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -658,10 +793,10 @@ async function runCLI(): Promise<void> {
 
   if (values.help) {
     console.log(`
-MySQL Agent - Single-File Database Assistant
+Dolph 🐬 - Single-File MySQL Database Assistant
 
 USAGE:
-  bun mysql-agent.ts [OPTIONS]
+  bun dolph.ts [OPTIONS]
 
 TASK MODE:
   --task, -t <task>     Execute a predefined task
@@ -676,17 +811,19 @@ TASK MODE:
 CHAT MODE:
   --chat, -c <message>  Send a natural language query to the agent
   --interactive, -i     Start interactive chat mode
+  --verbose, -v         Show extra run details (tokens, tool args/results)
 
 OUTPUT:
   --json, -j            Output raw JSON (default: formatted)
 
 EXAMPLES:
-  bun mysql-agent.ts --task test-connection
-  bun mysql-agent.ts --task list-tables --include-counts
-  bun mysql-agent.ts --task get-schema --table users
-  bun mysql-agent.ts --task query --sql "SELECT * FROM users LIMIT 5"
-  bun mysql-agent.ts --chat "What tables contain user data?"
-  bun mysql-agent.ts --interactive
+  bun dolph.ts --task test-connection
+  bun dolph.ts --task list-tables --include-counts
+  bun dolph.ts --task get-schema --table users
+  bun dolph.ts --task query --sql "SELECT * FROM users LIMIT 5"
+  bun dolph.ts --chat "What tables contain user data?"
+  bun dolph.ts --interactive
+  bun dolph.ts --interactive --verbose
 
 ENVIRONMENT:
   OPENAI_API_KEY      Required for chat mode
@@ -726,15 +863,22 @@ ENVIRONMENT:
         process.exit(1);
       }
 
+      const reporter = new TerminalReporter({ maxPayloadChars: 2000 });
+      const prompt = "dolph> ";
+
       console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║              MySQL Agent (Interactive Mode)                 ║
+║                         Dolph 🐬                            ║
 ╠════════════════════════════════════════════════════════════╣
-║  Type your question and press Enter                        ║
-║  Type 'exit' to quit                                       ║
+║  Talk to your database like you talk to a friend.          ║
+║                                                            ║
+║  Tips:                                                     ║
+║   - Ask natural language questions                          ║
+║   - Type 'exit' to quit                                     ║
+║   - Add --verbose to see tool details + token usage         ║
 ╚════════════════════════════════════════════════════════════╝
 `);
-      const prompt = "mysql> ";
+
       process.stdout.write(prompt);
 
       for await (const line of console) {
@@ -746,12 +890,37 @@ ENVIRONMENT:
         }
 
         if (input === "exit" || input === "quit") {
-          console.log("\nGoodbye! 👋\n");
+          console.log("\nLater, bruddah. 🐬\n");
           break;
         }
 
-        const result = await runMySQLAgent(input);
-        output(result);
+        const turnStart = performance.now();
+
+        reporter.startThinking();
+
+        try {
+          const agent = createAgent({ reporter, verbose: !!values.verbose });
+          const runResult = await run(agent, input, { maxTurns: getConfig().maxTurns });
+
+          reporter.stopSpinner();
+
+          // Print assistant output
+          console.log(runResult.finalOutput);
+
+          // Verbose diagnostics
+          if (values.verbose) {
+            const usage = (runResult as any).usage;
+            if (usage?.totalTokens !== undefined) {
+              console.log(`\n📊 tokens: ${usage.totalTokens}`);
+            }
+          }
+
+          console.log(`\n⏱️  ${Math.round((performance.now() - turnStart) * 100) / 100}ms`);
+        } catch (err) {
+          reporter.stopSpinner();
+          console.error("\n❌ Error:", err instanceof Error ? err.message : String(err));
+        }
+
         console.log();
         process.stdout.write(prompt);
       }
