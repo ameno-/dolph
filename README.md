@@ -65,34 +65,86 @@ bun dolph.ts --chat "What tables are in this database?"
 bun dolph.ts --interactive
 ```
 
-## Server Integration
+## Module Integration
+
+Dolph is designed as a **single-file module** you can import directly into any Bun application.
+
+### Quick Start
 
 ```typescript
-import {
-  executeMySQLTask,
-  runMySQLAgent,
-  executeQuery,
-  configureAgent,
-  MySQLAgentTasks,
-} from "./dolph.ts";
+import { runMySQLAgent, configureAgent, closeConnection } from "./dolph.ts";
 
-// Configure once
-configureAgent({
-  mysqlUrl: "mysql://user:pass@host:3306/db",
-  openaiApiKey: "sk-...",
+// Configure once at app startup
+await configureAgent({
+  mysqlUrl: process.env.MYSQL_URL,
+  openaiApiKey: process.env.OPENAI_API_KEY,
 });
 
-// Task-based execution
+// Query with natural language
+const result = await runMySQLAgent("Show me all active users");
+console.log(result.data);
+
+// Cleanup on shutdown
+await closeConnection();
+```
+
+### Available Exports
+
+| Export | Purpose |
+|--------|---------|
+| `configureAgent(config)` | Set MySQL/OpenAI credentials at startup |
+| `executeMySQLTask(task)` | Run predefined tasks (no OpenAI needed) |
+| `runMySQLAgent(prompt)` | Natural language queries (requires OpenAI) |
+| `executeQuery(sql)` | Direct SQL execution |
+| `closeConnection()` | Cleanup database connection |
+| `MySQLAgentTasks` | Enum of available task types |
+
+### Task-Based Usage (No OpenAI Key)
+
+```typescript
+import { executeMySQLTask, MySQLAgentTasks } from "./dolph.ts";
+
+// List all tables
 const tables = await executeMySQLTask({
   task: MySQLAgentTasks.LIST_TABLES,
   params: { includeRowCounts: true },
 });
 
-// Natural language (uses OpenAI)
-const answer = await runMySQLAgent("Show me inactive users");
+// Get table schema
+const schema = await executeMySQLTask({
+  task: MySQLAgentTasks.GET_SCHEMA,
+  params: { tableName: "users" },
+});
 
-// Direct SQL query
-const data = await executeQuery("SELECT * FROM users LIMIT 10");
+// Run SQL query
+const data = await executeMySQLTask({
+  task: MySQLAgentTasks.QUERY,
+  params: { sql: "SELECT * FROM users WHERE status = 'active'" },
+});
+```
+
+### Natural Language Usage (Requires OpenAI)
+
+```typescript
+import { runMySQLAgent } from "./dolph.ts";
+
+const result = await runMySQLAgent("What tables contain user data?");
+
+if (result.success) {
+  console.log(result.data);
+} else {
+  console.error(result.error);
+}
+```
+
+### Direct SQL
+
+```typescript
+import { executeQuery } from "./dolph.ts";
+
+const result = await executeQuery("SELECT COUNT(*) FROM orders", {
+  allowWrite: false,
+});
 ```
 
 ## Environment Variables

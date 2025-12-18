@@ -33,6 +33,7 @@
  *   MYSQL_ALLOW_WRITE - Enable write operations (default: false)
  *   MYSQL_ROW_LIMIT   - Max rows per query (default: 1000)
  *   AGENT_MODEL       - OpenAI model (default: gpt-4o-mini)
+ *   AGENT_MAX_TURNS   - Max agent turns per request (default: 10)
  */
 
 import { Agent, run, tool } from "@openai/agents";
@@ -189,7 +190,7 @@ function getConfig(): Required<MySQLAgentConfig> {
     allowWrite: _config.allowWrite ?? Bun.env.MYSQL_ALLOW_WRITE === "true",
     rowLimit: _config.rowLimit || parseInt(Bun.env.MYSQL_ROW_LIMIT || "1000", 10),
     model: _config.model || Bun.env.AGENT_MODEL || "gpt-4o-mini",
-    maxTurns: _config.maxTurns || 10,
+    maxTurns: _config.maxTurns || parseInt(Bun.env.AGENT_MAX_TURNS || "10", 10),
   };
 }
 
@@ -692,6 +693,7 @@ ENVIRONMENT:
   MYSQL_URL           MySQL connection URL
   MYSQL_ALLOW_WRITE   Enable write operations (default: false)
   MYSQL_ROW_LIMIT     Max rows per query (default: 1000)
+  AGENT_MAX_TURNS     Max agent turns per request (default: 10)
 `);
     return;
   }
