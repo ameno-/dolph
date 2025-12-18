@@ -1,0 +1,34 @@
+{
+  "name": "dolph",
+  "version": "1.0.0",
+  "description": "Dolph - Your friendly MySQL database agent powered by AI",
+  "type": "module",
+  "scripts": {
+    "setup": "bun setup-db.ts",
+    "teardown": "bun setup-db.ts --teardown",
+    "start": "bun dolph.ts",
+    "test-connection": "bun dolph.ts --task test-connection",
+    "list-tables": "bun dolph.ts --task list-tables",
+    "chat": "bun dolph.ts --interactive",
+    "test": "bun test-agent.ts"
+  },
+  "keywords": [
+    "mysql",
+    "database",
+    "agent",
+    "ai",
+    "openai",
+    "mcp",
+    "bun"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@openai/agents": "^0.3.6",
+    "mysql2": "^3.16.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
