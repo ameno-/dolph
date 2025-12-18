@@ -16,7 +16,7 @@ import {
   type TableSchema,
   type QueryResult,
   type ConnectionInfo,
-} from "./mysql-agent.ts";
+} from "./dolph.ts";
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -62,6 +62,15 @@ async function runTests(): Promise<void> {
     info(`Database: ${connResult.data.database}`);
     info(`User: ${connResult.data.user}`);
     info(`Duration: ${connResult.duration_ms}ms`);
+
+    // Safety guard: this test suite can be expensive/dangerous against real DBs
+    // (e.g., table listing with counts). The bundled setup script uses `testdb`.
+    if (connResult.data.database !== "testdb") {
+      fail(`Refusing to run tests against non-test database: '${connResult.data.database}'`);
+      log("\nSet MYSQL_DB=testdb or run: bun setup-db.ts (which generates a .env for testdb).\n");
+      return;
+    }
+
     passed++;
   } else {
     fail(`Connection failed: ${connResult.error}`);

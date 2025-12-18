@@ -268,8 +268,8 @@ async function setup(): Promise<void> {
   console.log(`  ${CONFIG.connectionUrl}\n`);
   console.log("Next steps:");
   console.log("  1. Add your OPENAI_API_KEY to .env (for chat mode)");
-  console.log("  2. Run: bun mysql-agent.ts --task test-connection");
-  console.log("  3. Run: bun mysql-agent.ts --task list-tables");
+  console.log("  2. Run: bun dolph.ts --task test-connection");
+  console.log("  3. Run: bun dolph.ts --task list-tables");
   console.log("=".repeat(50) + "\n");
 }
 
