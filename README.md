@@ -1,4 +1,6 @@
-# Dolph 🐬
+<img width="1024" height="1024" alt="OpenAI Playground 2026-02-11 at 02 03 37 (0)" src="https://github.com/user-attachments/assets/0be12b7d-b9f5-419c-acc3-eebcaefb0076" />
+
+# ITS DOLPH 🐬
 
 > Your friendly MySQL database agent powered by AI
 
